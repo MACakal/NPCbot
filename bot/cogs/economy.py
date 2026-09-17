@@ -203,13 +203,17 @@ class Economy(commands.Cog):
                 username = f"User ID: {entry['id']}"
             
             medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"**{i}.**"
-            leaderboard_text += f"{medal} {username} — ${entry['money']:.2f}\n"
-        
+            leaderboard_text += (
+                f"{medal} {username} — **${entry['net_worth']:.2f}** "
+                f"(wallet ${entry['wallet']:.2f} · bank ${entry['bank']:.2f})\n"
+            )
+
         embed = discord.Embed(
             title="🏆 Leaderboard",
             description=leaderboard_text,
             color=discord.Color.gold()
         )
+        embed.set_footer(text="Ranked by wallet + bank")
         
         await interaction.response.send_message(embed=embed)
     

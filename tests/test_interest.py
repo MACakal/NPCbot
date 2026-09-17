@@ -1,10 +1,12 @@
 """Phase 2: bounded, path-independent bank interest (audit H1, H2)."""
 import unittest
+from unittest.mock import patch
 
 from helpers import fresh_db
 
 from config import Config
 from database.manager import DatabaseManager
+from utils import clock
 
 PERIOD = Config.BANK_INTEREST_PERIOD_SECONDS
 PER_DAY = 86400 // PERIOD
@@ -47,19 +49,8 @@ class ApplyInterestTests(unittest.TestCase):
         self.db.update_bank_balance_and_interest(1, 10_000, self.start)
 
     def _claim_at(self, ts):
-        # apply_interest reads "now" from the clock; move last_interest instead.
-        acct = self.db.get_bank_account(1)
-        now = self._now()
-        shift = now - ts
-        self.db.update_bank_balance_and_interest(1, acct["money"], acct["last_interest"] + shift)
-        self.db.apply_interest(1)
-        acct = self.db.get_bank_account(1)
-        self.db.update_bank_balance_and_interest(1, acct["money"], acct["last_interest"] - shift)
-
-    @staticmethod
-    def _now():
-        from datetime import datetime
-        return int(datetime.utcnow().timestamp())
+        with patch.object(clock, "now_ts", return_value=ts):
+            self.db.apply_interest(1)
 
     def test_claim_frequency_does_not_matter(self):
         days = 30

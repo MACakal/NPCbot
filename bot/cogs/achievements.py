@@ -1,10 +1,10 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from datetime import datetime
 from database.manager import DatabaseManager
 from config import Config
 from utils.achievements import ACHIEVEMENTS
+from utils import clock
 
 
 class Achievements(commands.Cog):
@@ -24,7 +24,7 @@ class Achievements(commands.Cog):
 
         for achievement_id, info in ACHIEVEMENTS.items():
             if achievement_id in unlocked:
-                when = datetime.fromtimestamp(unlocked[achievement_id]).strftime('%Y-%m-%d')
+                when = clock.utc_day(unlocked[achievement_id])
                 name = f"{info['emoji']} {info['name']}"
                 value = f"{info['description']}\n*Unlocked {when}*"
             else:

@@ -122,9 +122,11 @@ class RobberyTests(unittest.IsolatedAsyncioTestCase):
         steal, fine = rob_amounts(target_money=10_000, robber_money=100)
         self.assertEqual(steal, Config.ROB_MAX_STEAL)
         self.assertEqual(fine, Config.ROB_MAX_STEAL * Config.ROB_FAIL_PENALTY_OF_ATTEMPT)
-        # Robber EV is no longer free money for a poor robber.
-        ev = Config.ROB_SUCCESS_CHANCE * steal - (1 - Config.ROB_SUCCESS_CHANCE) * fine
-        self.assertLess(ev, steal * Config.ROB_SUCCESS_CHANCE)
+        # A robber with an empty wallet still faces a real fine.
+        _, broke_fine = rob_amounts(target_money=10_000, robber_money=0)
+        self.assertGreater(broke_fine, 0)
+        _, insured_fine = rob_amounts(target_money=10_000, robber_money=0, penalty_reduction=0.5)
+        self.assertAlmostEqual(insured_fine, broke_fine / 2)
 
     async def test_broke_robber_is_rejected(self):
         inter = FakeInteraction(3)

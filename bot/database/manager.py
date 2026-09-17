@@ -2,8 +2,15 @@ import sqlite3
 from typing import Optional, List, Dict
 from config import Config
 from datetime import datetime
+from utils import clock
 import threading
 import random
+
+# Shop effects that are permanent upgrades (owning one is enough).
+PERMANENT_EFFECTS = {"npc_cost_discount", "rob_penalty_reduction"}
+# Shop effects that are used up one at a time.
+CONSUMABLE_EFFECTS = {"rob_success_consumable", "rob_protection_consumable", "work_cooldown_reset"}
+
 
 class DatabaseManager:
     def __init__(self, db_filename: str = "database.db"):
@@ -202,19 +209,20 @@ class DatabaseManager:
         self._seed_trivia_questions()
 
     def _seed_npc_templates(self):
-        """Seed the fixed NPC roster. INSERT OR IGNORE keyed by id, so this
-        is safe to run on every startup — existing rows are never touched,
-        new archetypes added here in the future just slot in."""
+        """Seed the fixed NPC roster, keyed by id. The roster is owned by
+        this code, so existing rows are updated to match it (that's how perk
+        rebalances reach the live database); recruited companions only
+        reference the id, so they pick up the new values."""
         templates = [
             (1, "Reggie the Muscle Broker", "merchant",
              "Made his fortune trading discounted tendons. Somehow.",
-             "daily_bonus", 0.03),
+             "daily_bonus", 0.05),
             (2, "Big Clavicle", "laborer",
              "Built like a doorframe, works like one too.",
-             "work_bonus", 0.03),
+             "work_bonus", 0.05),
             (3, "Dr. Ledger", "banker",
              "Compounds interest and questionable diagnoses.",
-             "bank_interest_bonus", 0.03),
+             "bank_interest_bonus", 0.10),
             (4, "The Sternum", "guard",
              "Stands between you and anyone dumb enough to try something.",
              "rob_defense", 0.05),
@@ -226,33 +234,52 @@ class DatabaseManager:
         cursor = conn.cursor()
         cursor.executemany(
             """
-            INSERT OR IGNORE INTO npc_templates
+            INSERT INTO npc_templates
                 (id, name, archetype, flavor_text, perk_type, perk_value)
             VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                archetype = excluded.archetype,
+                flavor_text = excluded.flavor_text,
+                perk_type = excluded.perk_type,
+                perk_value = excluded.perk_value
             """,
             templates
         )
         conn.commit()
 
     def _seed_shop_items(self):
-        """Seed the fixed shop catalog. INSERT OR IGNORE keyed by id, so
-        this is safe to run on every startup — existing rows (and any
-        purchases already made against them) are never touched."""
+        """Seed the fixed shop catalog, keyed by id. Like the NPC roster,
+        the catalog is owned by this code, so price/effect changes are
+        applied to existing rows. Inventories only reference the id, so
+        purchases already made are kept."""
         items = [
-            (1, "Discount Badge", "Reduces NPC recruiting & training costs by 10%.",
-             300, "npc_cost_discount", 0.10),
-            (2, "Insurance Policy", "Halves the fine you pay when a robbery goes wrong.",
+            (1, "Discount Badge", "Permanent: NPC recruiting & training cost 25% less.",
+             100, "npc_cost_discount", 0.25),
+            (2, "Insurance Policy", "Permanent: halves the fine you pay when a robbery goes wrong.",
              250, "rob_penalty_reduction", 0.50),
             (3, "Golden Feather", "Purely decorative. Flex on your friends.",
              100, "cosmetic", 0.0),
+            (4, "Lockpick", "Consumable: +10% success chance on your next robbery. Used automatically.",
+             75, "rob_success_consumable", 0.10),
+            (5, "Padlock", "Consumable: nobody can rob you for 24h. Activate with /use.",
+             150, "rob_protection_consumable", 86400),
+            (6, "Energy Drink", "Consumable: skip your /work break once. Activate with /use.",
+             30, "work_cooldown_reset", 0.0),
         ]
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.executemany(
             """
-            INSERT OR IGNORE INTO shop_items
+            INSERT INTO shop_items
                 (id, name, description, price, effect_type, effect_value)
             VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                description = excluded.description,
+                price = excluded.price,
+                effect_type = excluded.effect_type,
+                effect_value = excluded.effect_value
             """,
             items
         )
@@ -658,10 +685,17 @@ class DatabaseManager:
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            'SELECT * FROM users ORDER BY money DESC LIMIT ?',
+            """
+            SELECT users.id, users.money AS wallet, COALESCE(Bank.money, 0) AS bank,
+                   users.money + COALESCE(Bank.money, 0) AS net_worth
+            FROM users
+            LEFT JOIN Bank ON Bank.id = users.id
+            ORDER BY net_worth DESC
+            LIMIT ?
+            """,
             (limit,)
         )
-        return [self._convert_user_row(row) for row in cursor.fetchall()]
+        return [dict(row) for row in cursor.fetchall()]
 
     def get_total_users(self) -> int:
         conn = self._get_connection()
@@ -688,7 +722,7 @@ class DatabaseManager:
 
         self.update_bank_balance_and_interest(user_id=user_id,
                                               new_balance=bank_account["money"],
-                                              timestamp=int(datetime.utcnow().timestamp()),
+                                              timestamp=clock.now_ts(),
                                               earned_interest=amount)
         return True
 
@@ -799,7 +833,7 @@ class DatabaseManager:
 
     def apply_interest(self, user_id: int) -> float:
         bank = self.get_bank_account(user_id)
-        now = int(datetime.utcnow().timestamp())
+        now = clock.now_ts()
         last_interest = bank['last_interest']
         if not last_interest:
             self.update_bank_balance_and_interest(user_id, bank['money'], now)
@@ -840,6 +874,13 @@ class DatabaseManager:
     def get_random_npc_template(self) -> Optional[Dict]:
         templates = self.get_npc_templates()
         return random.choice(templates) if templates else None
+
+    def get_npc_template_by_archetype(self, archetype: str) -> Optional[Dict]:
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM npc_templates WHERE archetype = ?', (archetype,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
 
     def get_user_npc(self, user_id: int) -> Optional[Dict]:
         conn = self._get_connection()
@@ -960,10 +1001,14 @@ class DatabaseManager:
         )
         return [dict(row) for row in cursor.fetchall()]
 
-    def purchase_item(self, user_id: int, item_id: int) -> bool:
+    def purchase_item(self, user_id: int, item_id: int) -> str:
+        """Returns "ok", "not_found", "already_owned" (permanent upgrades
+        don't stack, so a second copy is refused) or "insufficient_funds"."""
         item = self.get_item(item_id)
         if item is None:
-            return False
+            return "not_found"
+        if item["effect_type"] in PERMANENT_EFFECTS and self.get_item_effect_value(user_id, item["effect_type"]) > 0:
+            return "already_owned"
 
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -975,7 +1020,7 @@ class DatabaseManager:
             )
             if cursor.rowcount == 0:
                 conn.rollback()
-                return False
+                return "insufficient_funds"
             cursor.execute(
                 """
                 INSERT INTO user_inventory (user_id, item_id, quantity) VALUES (?, ?, 1)
@@ -984,7 +1029,7 @@ class DatabaseManager:
                 (user_id, item_id)
             )
             conn.commit()
-            return True
+            return "ok"
         except Exception as e:
             conn.rollback()
             raise e
@@ -1042,7 +1087,7 @@ class DatabaseManager:
         the user already had it (idempotent via INSERT OR IGNORE)."""
         conn = self._get_connection()
         cursor = conn.cursor()
-        now = int(datetime.utcnow().timestamp())
+        now = clock.now_ts()
         cursor.execute(
             'INSERT OR IGNORE INTO user_achievements (user_id, achievement_id, unlocked_at) VALUES (?, ?, ?)',
             (user_id, achievement_id, now)
