@@ -116,16 +116,9 @@ class Economy(commands.Cog):
 
     @app_commands.command(name="give", description="Give money to another user")
     @app_commands.describe(member="User to give money to", amount="Amount to give")
-    async def give(self, interaction: discord.Interaction, member: discord.Member, amount: float):
-        if amount <= 0:
-            embed = discord.Embed(
-                title="❌ Invalid Amount",
-                description="Amount must be positive",
-                color=discord.Color.red()
-            )
-            await interaction.response.send_message(embed=embed)
-            return
-        
+    async def give(self, interaction: discord.Interaction, member: discord.Member, amount: app_commands.Range[float, 0.01, None]):
+        amount = round(amount, 2)
+
         if self.db.transfer_money(interaction.user.id, member.id, amount):
             embed = discord.Embed(
                 title="💸 Transfer Complete",
@@ -191,23 +184,12 @@ class Economy(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="deposit", description="Deposit money to your bank account")
-    async def deposit(self, interaction: discord.Interaction, amount: float) -> None:
+    @app_commands.describe(amount="Amount to deposit")
+    async def deposit(self, interaction: discord.Interaction, amount: app_commands.Range[float, 0.01, None]) -> None:
+        amount = round(amount, 2)
         self.db.apply_interest(user_id=interaction.user.id)
-        user_data = self.db.get_user(user_id=interaction.user.id)
-        
-        if user_data["money"] < amount:
-            embed = discord.Embed(
-                title="❌ Insufficient Funds",
-                description=f"You don't have ${amount:.2f} to deposit",
-                color=discord.Color.red()
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
 
-        if self.db.deposite_money_to_bank(user_id=interaction.user.id, amount=amount):
-            user_data["money"] -= amount
-            self.db.set_user_money(user_id=interaction.user.id, amount=user_data["money"])
-            
+        if self.db.deposit_to_bank(user_id=interaction.user.id, amount=amount):
             embed = discord.Embed(
                 title="✅ Deposit Successful",
                 description=f"Deposited **${amount:.2f}** to your bank account",
@@ -216,21 +198,19 @@ class Economy(commands.Cog):
             await interaction.response.send_message(embed=embed, ephemeral=True)
         else:
             embed = discord.Embed(
-                title="❌ Error",
-                description="An unexpected error occurred. Please contact JinMori07",
+                title="❌ Insufficient Funds",
+                description=f"You don't have ${amount:.2f} to deposit",
                 color=discord.Color.red()
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
-    
+
     @app_commands.command(name="withdraw", description="Withdrawing money from your bank account")
-    async def withdraw(self, interaction: discord.Interaction, amount: float) -> None:
+    @app_commands.describe(amount="Amount to withdraw")
+    async def withdraw(self, interaction: discord.Interaction, amount: app_commands.Range[float, 0.01, None]) -> None:
+        amount = round(amount, 2)
         self.db.apply_interest(user_id=interaction.user.id)
-        user_data = self.db.get_user(user_id=interaction.user.id)
-        
+
         if self.db.withdraw_from_bank(user_id=interaction.user.id, amount=amount):
-            user_data["money"] += amount
-            self.db.set_user_money(user_id=interaction.user.id, amount=user_data["money"])
-            
             embed = discord.Embed(
                 title="✅ Withdrawal Successful",
                 description=f"Withdrew **${amount:.2f}** from your bank account",

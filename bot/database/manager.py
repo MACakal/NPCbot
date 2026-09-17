@@ -334,7 +334,27 @@ class DatabaseManager:
         conn.commit()
         return cursor.rowcount > 0
 
+    def try_debit_user(self, user_id: int, amount: float) -> bool:
+        """Atomically take `amount` from a wallet only if it can cover it.
+        Returns False (and changes nothing) otherwise, so wallets never go
+        negative."""
+        if amount < 0:
+            return False
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'UPDATE users SET money = money - ? WHERE id = ? AND money >= ?',
+            (amount, user_id, amount)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
     def transfer_money(self, from_id: int, to_id: int, amount: float) -> bool:
+        if amount <= 0:
+            return False
+        # Create the recipient before BEGIN: create_user commits, which would
+        # otherwise end the transaction between the debit and the credit.
+        self.get_or_create_user(to_id)
         conn = self._get_connection()
         cursor = conn.cursor()
         try:
@@ -346,7 +366,6 @@ class DatabaseManager:
             if cursor.rowcount == 0:
                 conn.rollback()
                 return False
-            self.get_or_create_user(to_id)
             cursor.execute(
                 'UPDATE users SET money = money + ? WHERE id = ?',
                 (amount, to_id)
@@ -490,21 +509,56 @@ class DatabaseManager:
             cursor.execute("INSERT INTO Bank (id, money, last_interest, total_deposited, total_withdrawn) VALUES (?, ?, ?, ?, ?)", (user_id, 0, None, 0, 0))
         conn.commit()
 
-    def deposite_money_to_bank(self, user_id : int, amount : float) -> bool:
+    def deposit_to_bank(self, user_id: int, amount: float) -> bool:
+        """Atomically move `amount` from the wallet into the bank. Returns
+        False if the amount isn't positive or the wallet can't cover it."""
+        if amount <= 0:
+            return False
         self.create_bank_account_if_neccesary(user_id=user_id)
         conn = self._get_connection()
         cursor = conn.cursor()
-        cursor.execute("UPDATE Bank SET money = money + ?, total_deposited = total_deposited + ? WHERE id = ?", (amount, amount, user_id))
-        conn.commit()
-        return cursor.rowcount > 0
+        try:
+            cursor.execute('BEGIN')
+            cursor.execute(
+                'UPDATE users SET money = money - ? WHERE id = ? AND money >= ?',
+                (amount, user_id, amount)
+            )
+            if cursor.rowcount == 0:
+                conn.rollback()
+                return False
+            cursor.execute(
+                "UPDATE Bank SET money = money + ?, total_deposited = total_deposited + ? WHERE id = ?",
+                (amount, amount, user_id)
+            )
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            raise e
 
     def withdraw_from_bank(self, user_id: int, amount: float) -> bool:
+        """Atomically move `amount` from the bank into the wallet. Returns
+        False if the amount isn't positive or the bank can't cover it."""
+        if amount <= 0:
+            return False
         self.create_bank_account_if_neccesary(user_id)
         conn = self._get_connection()
         cursor = conn.cursor()
-        cursor.execute("UPDATE Bank SET money = money - ?, total_withdrawn = total_withdrawn + ? WHERE id = ? AND money >= ?", (amount, amount, user_id, amount))
-        conn.commit()
-        return cursor.rowcount > 0
+        try:
+            cursor.execute('BEGIN')
+            cursor.execute(
+                "UPDATE Bank SET money = money - ?, total_withdrawn = total_withdrawn + ? WHERE id = ? AND money >= ?",
+                (amount, amount, user_id, amount)
+            )
+            if cursor.rowcount == 0:
+                conn.rollback()
+                return False
+            cursor.execute('UPDATE users SET money = money + ? WHERE id = ?', (amount, user_id))
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            raise e
 
     def get_bank_account(self, user_id : int) -> Optional[Dict]:
         self.create_bank_account_if_neccesary(user_id=user_id)

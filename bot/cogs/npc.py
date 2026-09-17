@@ -62,9 +62,19 @@ class Npc(commands.Cog):
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
+        if not self.db.try_debit_user(user_id, recruit_cost):
+            embed = discord.Embed(
+                title="❌ Insufficient Funds",
+                description=f"Recruiting a companion costs **${recruit_cost:.2f}**",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
         now = int(datetime.utcnow().timestamp())
         recruited = self.db.recruit_npc(user_id, template["id"], now)
         if not recruited:
+            self.db.update_user_money(user_id, recruit_cost)  # refund
             embed = discord.Embed(
                 title="❌ Already Have A Companion",
                 description="Use `/npc-release` first if you want to recruit a different one.",
@@ -72,8 +82,6 @@ class Npc(commands.Cog):
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
-
-        self.db.update_user_money(user_id, -recruit_cost)
 
         embed = discord.Embed(
             title="🤝 Companion Recruited!",
@@ -141,7 +149,7 @@ class Npc(commands.Cog):
         discount = self.db.get_item_effect_value(user_id, "npc_cost_discount")
         train_cost = Config.NPC_TRAIN_COST * (1 - discount)
 
-        if user_data["money"] < train_cost:
+        if not self.db.try_debit_user(user_id, train_cost):
             embed = discord.Embed(
                 title="❌ Insufficient Funds",
                 description=f"Training costs **${train_cost:.2f}**",
@@ -150,7 +158,6 @@ class Npc(commands.Cog):
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
-        self.db.update_user_money(user_id, -train_cost)
         updated = self.db.train_npc(user_id, Config.NPC_TRAIN_XP, Config.NPC_XP_PER_LEVEL, Config.NPC_MAX_LEVEL)
 
         if updated["leveled_up"]:

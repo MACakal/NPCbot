@@ -173,12 +173,19 @@ class JackpotView(discord.ui.View):
 
     @discord.ui.button(label="Buy Ticket", style=discord.ButtonStyle.success)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        db = self.cog.db
+        # Balance is re-checked here, at purchase time, not when the prompt
+        # was posted — the wallet may have been spent since.
+        if not db.try_debit_user(self.user_id, self.ticket_price):
+            await interaction.response.send_message(
+                f"You no longer have **${self.ticket_price:.2f}** for a ticket.", ephemeral=True
+            )
+            return
+
         self.resolved = True
         for child in self.children:
             child.disabled = True
 
-        db = self.cog.db
-        db.update_user_money(self.user_id, -self.ticket_price)
         db.update_pool_money(self.ticket_price)
         current_pool = db.get_pool()["money"]
 
@@ -379,9 +386,9 @@ class Games(commands.Cog):
             return
 
         user_id = interaction.user.id
-        user_data = self.db.get_or_create_user(user_id)
+        self.db.get_or_create_user(user_id)
 
-        if amount > user_data["money"]:
+        if not self.db.try_debit_user(user_id, amount):
             embed = discord.Embed(
                 title="❌ Insufficient Funds",
                 description=f"You don't have ${amount:.2f} to bet",
@@ -389,8 +396,6 @@ class Games(commands.Cog):
             )
             await interaction.response.send_message(embed=embed)
             return
-
-        self.db.update_user_money(user_id, -amount)
 
         deck = create_deck()
         player_hand = [deck.pop(), deck.pop()]
