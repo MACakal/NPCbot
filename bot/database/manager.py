@@ -4,8 +4,6 @@ from config import Config
 from datetime import datetime
 import math
 import threading
-from pathlib import Path
-import os
 
 class DatabaseManager:
     def __init__(self, db_filename: str = "database.db"):
@@ -14,31 +12,12 @@ class DatabaseManager:
 
         db_filename: name of the sqlite database file, stored in the top-level database folder.
         """
-        # Allow override via environment variable
-        data_dir = os.getenv('BOT_DATA_DIR')
-        
-        if data_dir:
-            # Use environment variable if set
-            self.BASE_DIR = Path(data_dir)
-        else:
-            # Check if we're running from a mounted filesystem
-            current_path = Path(__file__).resolve()
-            current_path_str = str(current_path)
-            
-            # If running from mounted partition (/mnt/ or /run/media/), use Linux home directory
-            if current_path_str.startswith('/mnt/') or current_path_str.startswith('/run/media/'):
-                self.BASE_DIR = Path.home() / "discord-bot-data"
-            else:
-                # Otherwise use the project root as before
-                self.BASE_DIR = current_path.parents[2]  # two levels up from bot/database/manager.py
-        
+        self.BASE_DIR = Config.BASE_DIR
         self.DB_DIR = self.BASE_DIR / "database"              # database folder
         self.DB_DIR.mkdir(parents=True, exist_ok=True)        # create folder if missing
         self.db_path = self.DB_DIR / db_filename              # full path to database file
 
         print(f"DEBUG: Database will be stored at: {self.db_path}")
-        print(f"DEBUG: Running from mounted partition: {current_path_str.startswith('/mnt/') or current_path_str.startswith('/run/media/')}")
-        print(f"DEBUG: BOT_DATA_DIR env var: {os.getenv('BOT_DATA_DIR')}")
 
         self._local = threading.local()
 
