@@ -180,15 +180,18 @@ class TriviaTests(unittest.IsolatedAsyncioTestCase):
     def _cog(self, messages):
         return make_cog(Trivia, self.db, bot=FakeBot(messages))
 
-    async def test_starter_cannot_win_and_reward_is_minted(self):
-        cog = self._cog([fake_message(1, "yes"), fake_message(2, "YES")])
-        with patch.object(self.db, "get_random_trivia_question", return_value={"id": 1, "question": "Q?", "answer": "yes"}):
+    async def test_starter_can_win_and_reward_is_minted(self):
+        question = {"id": 1, "question": "Q?", "answer": "glucose"}
+        cog = self._cog([fake_message(1, "Glucose"), fake_message(2, "glucose")])
+        with patch.object(self.db, "get_random_trivia_question", return_value=question):
             await cog.trivia.callback(cog, FakeInteraction(1))
-        self.assertIsNone(self.db.get_user(1))
-        self.assertAlmostEqual(self.db.get_user(2)["money"], Config.STARTING_BALANCE + Config.TRIVIA_REWARD)
+        self.assertAlmostEqual(self.db.get_user(1)["money"], Config.STARTING_BALANCE + Config.TRIVIA_REWARD)
+        self.assertIsNone(self.db.get_user(2))
         self.assertAlmostEqual(self.db.get_pool()["money"], 0)
 
-    async def test_starter_answer_gets_notice_once(self):
+    async def test_capped_winner_gets_notice_once(self):
+        today = clock.utc_day(clock.now_ts())
+        self.db.add_daily_counter(1, "trivia_wins", today, Config.TRIVIA_MAX_WINS_PER_DAY)
         question = {"id": 1, "question": "Q?", "answer": "glucose"}
         first, second = fake_message(1, "glucose"), fake_message(1, "Glucose")
         cog = self._cog([first, second])
@@ -197,16 +200,9 @@ class TriviaTests(unittest.IsolatedAsyncioTestCase):
             await cog.trivia.callback(cog, inter)
         await asyncio.sleep(0)  # let the notice task run
         self.assertEqual(len(first.replies), 1)
-        self.assertIn("started this round", first.replies[0])
+        self.assertIn("Come back tomorrow", first.replies[0])
         self.assertEqual(second.replies, [])
         self.assertTrue(inter.followup.sent[-1].embed.description.startswith("Nobody else got it"))
-
-    async def test_starter_can_answer_when_enabled(self):
-        question = {"id": 1, "question": "Q?", "answer": "glucose"}
-        cog = self._cog([fake_message(1, "glucose")])
-        with patch.object(Config, "TRIVIA_STARTER_CAN_ANSWER", True),                 patch.object(self.db, "get_random_trivia_question", return_value=question):
-            await cog.trivia.callback(cog, FakeInteraction(1))
-        self.assertAlmostEqual(self.db.get_user(1)["money"], Config.STARTING_BALANCE + Config.TRIVIA_REWARD)
 
     async def test_channel_cooldown(self):
         cog = self._cog([])
@@ -221,13 +217,14 @@ class TriviaTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_daily_win_cap(self):
         question = {"id": 1, "question": "Q?", "answer": "yes"}
-        cog = self._cog([fake_message(2, "yes")])
+        # Someone starting and answering their own rounds is still capped.
+        cog = self._cog([fake_message(1, "yes")])
         with patch.object(self.db, "get_random_trivia_question", return_value=question):
             for i in range(Config.TRIVIA_MAX_WINS_PER_DAY + 2):
                 cog.channel_next_round.clear()
                 await cog.trivia.callback(cog, FakeInteraction(1))
         expected = Config.STARTING_BALANCE + Config.TRIVIA_MAX_WINS_PER_DAY * Config.TRIVIA_REWARD
-        self.assertAlmostEqual(self.db.get_user(2)["money"], expected)
+        self.assertAlmostEqual(self.db.get_user(1)["money"], expected)
 
     def test_question_bank_is_large(self):
         conn = self.db._get_connection()

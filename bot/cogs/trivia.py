@@ -52,14 +52,16 @@ class Trivia(commands.Cog):
             description=question["question"],
             color=discord.Color.blurple()
         )
-        footer = f"First correct answer wins ${Config.TRIVIA_REWARD:.2f}! {Config.TRIVIA_TIMEOUT_SECONDS}s to answer."
-        if not Config.TRIVIA_STARTER_CAN_ANSWER:
-            footer += " The person who started the round can't answer."
-        embed.set_footer(text=footer)
+        embed.set_footer(
+            text=(
+                f"First correct answer wins ${Config.TRIVIA_REWARD:.2f}! "
+                f"{Config.TRIVIA_TIMEOUT_SECONDS}s to answer. "
+                f"Max {Config.TRIVIA_MAX_WINS_PER_DAY} wins per day."
+            )
+        )
         await interaction.response.send_message(embed=embed)
 
         accepted_answers = {a.strip().lower() for a in question["answer"].split("|")}
-        starter_id = interaction.user.id
         today = clock.utc_day(now)
 
         # Correct answers that don't count still get a short explanation
@@ -78,9 +80,6 @@ class Trivia(commands.Cog):
                 or message.channel.id != channel_id
                 or message.content.strip().lower() not in accepted_answers
             ):
-                return False
-            if message.author.id == starter_id and not Config.TRIVIA_STARTER_CAN_ANSWER:
-                notify_blocked(message, "You started this round, so you can't win it. Let someone else answer!")
                 return False
             if not self.can_win(message.author.id, today):
                 notify_blocked(

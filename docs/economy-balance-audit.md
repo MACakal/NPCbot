@@ -16,7 +16,7 @@ the real database).
 | 1. Critical exploits | C1, C2, C3 | Amount validation and atomic wallet/bank moves; guarded `try_debit_user` for jackpot, blackjack and NPC costs |
 | 2. Bank interest | H1, H2, L4 (labels) | `2%/day · B·K/(K+B)` with K = 5000 (at most $100/day), accrued hourly by whole periods, no dependence on others' balances |
 | 3. Gambling | H3, H4, M1, M2, L3, L5 | Coin flip pays 0.95×, $1,000 max bet, 25% of losses destroyed, green pays 11×, blackjack Double Down, jackpot pays 50% of pool with a pool-scaled ticket price and 5-min cooldown |
-| 4. Earnings & crime | H6, H7, M3, M4, M5 | 60s chat-reward cooldown (guild only), 8 work shifts/day, daily streak up to +50%, 5% destroyed transfer tax and $5,000/day limit, robbery minimum wallet / $500 steal cap / fine ≥ 50% of attempt / 2h target protection, trivia channel cooldown / starter can't answer / 5 wins/day / $25 minted prize / 60 questions |
+| 4. Earnings & crime | H6, H7, M3, M4, M5 | 60s chat-reward cooldown (guild only), 8 work shifts/day, daily streak up to +50%, 5% destroyed transfer tax and $5,000/day limit, robbery minimum wallet / $500 steal cap / fine ≥ 50% of attempt / 2h target protection, trivia channel cooldown / 5 wins/day (starters may answer their own rounds; the daily cap bounds self-farming) / $25 minted prize / 60 questions |
 | 5. NPCs, shop, polish | H5, L1, L2, M6, M7, L4, timestamps | Perks 5%/5%/10% per level, choose your archetype, 30-min training cooldown, 25% training refund on release, Discount Badge $100 for 25%, no duplicate permanent items, consumables (Lockpick, Padlock, Energy Drink) with `/use`, leaderboard by wallet + bank, true UTC timestamps |
 
 **Not done (needs a decision from you):**

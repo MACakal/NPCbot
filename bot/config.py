@@ -55,8 +55,6 @@ class Config:
     TRIVIA_TIMEOUT_SECONDS = 30
     TRIVIA_CHANNEL_COOLDOWN_SECONDS = 300
     TRIVIA_MAX_WINS_PER_DAY = 5
-    # Stops players farming their own rounds. Set True to test trivia solo.
-    TRIVIA_STARTER_CAN_ANSWER = False
 
     # Chat rewards: at most one payout per user per cooldown window.
     MESSAGE_REWARD_COOLDOWN_SECONDS = 60
