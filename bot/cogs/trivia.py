@@ -52,34 +52,52 @@ class Trivia(commands.Cog):
             description=question["question"],
             color=discord.Color.blurple()
         )
-        embed.set_footer(
-            text=(
-                f"First correct answer wins ${Config.TRIVIA_REWARD:.2f}! "
-                f"{Config.TRIVIA_TIMEOUT_SECONDS}s to answer. "
-                f"The person who started the round can't answer."
-            )
-        )
+        footer = f"First correct answer wins ${Config.TRIVIA_REWARD:.2f}! {Config.TRIVIA_TIMEOUT_SECONDS}s to answer."
+        if not Config.TRIVIA_STARTER_CAN_ANSWER:
+            footer += " The person who started the round can't answer."
+        embed.set_footer(text=footer)
         await interaction.response.send_message(embed=embed)
 
         accepted_answers = {a.strip().lower() for a in question["answer"].split("|")}
         starter_id = interaction.user.id
         today = clock.utc_day(now)
 
+        # Correct answers that don't count still get a short explanation
+        # (once per user per round) instead of being silently ignored.
+        blocked_correct = set()
+
+        def notify_blocked(message: discord.Message, reason: str):
+            if message.author.id in blocked_correct:
+                return
+            blocked_correct.add(message.author.id)
+            asyncio.create_task(self._send_notice(message, reason))
+
         def check(message: discord.Message) -> bool:
-            return (
-                not message.author.bot
-                and message.author.id != starter_id
-                and message.channel.id == channel_id
-                and message.content.strip().lower() in accepted_answers
-                and self.can_win(message.author.id, today)
-            )
+            if (
+                message.author.bot
+                or message.channel.id != channel_id
+                or message.content.strip().lower() not in accepted_answers
+            ):
+                return False
+            if message.author.id == starter_id and not Config.TRIVIA_STARTER_CAN_ANSWER:
+                notify_blocked(message, "You started this round, so you can't win it. Let someone else answer!")
+                return False
+            if not self.can_win(message.author.id, today):
+                notify_blocked(
+                    message, f"You've already won {Config.TRIVIA_MAX_WINS_PER_DAY} trivia rounds today. Come back tomorrow!"
+                )
+                return False
+            return True
 
         try:
             reply = await self.bot.wait_for("message", check=check, timeout=Config.TRIVIA_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
             embed = discord.Embed(
                 title="⏰ Time's Up",
-                description=f"Nobody got it. The answer was **{question['answer'].split('|')[0]}**.",
+                description=(
+                    f"{'Nobody else' if blocked_correct else 'Nobody'} got it. "
+                    f"The answer was **{question['answer'].split('|')[0]}**."
+                ),
                 color=discord.Color.orange()
             )
             await interaction.followup.send(embed=embed)
@@ -100,6 +118,14 @@ class Trivia(commands.Cog):
 
         if self.db.unlock_achievement(winner_id, "first_trivia_win"):
             await announce_unlock(interaction, "first_trivia_win")
+
+
+    @staticmethod
+    async def _send_notice(message: discord.Message, text: str):
+        try:
+            await message.reply(text, mention_author=False, delete_after=15)
+        except discord.HTTPException:
+            pass
 
 
 async def setup(bot: commands.Bot):

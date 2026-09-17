@@ -15,11 +15,18 @@ from utils import clock
 
 
 def fake_message(user_id, content="hello there", guild=True, bot=False, channel_id=1):
+    replies = []
+
+    async def reply(text, **kwargs):
+        replies.append(text)
+
     return SimpleNamespace(
         author=SimpleNamespace(id=user_id, bot=bot, mention=f"<@{user_id}>"),
         guild=object() if guild else None,
         content=content,
         channel=SimpleNamespace(id=channel_id),
+        reply=reply,
+        replies=replies,
     )
 
 
@@ -180,6 +187,26 @@ class TriviaTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.db.get_user(1))
         self.assertAlmostEqual(self.db.get_user(2)["money"], Config.STARTING_BALANCE + Config.TRIVIA_REWARD)
         self.assertAlmostEqual(self.db.get_pool()["money"], 0)
+
+    async def test_starter_answer_gets_notice_once(self):
+        question = {"id": 1, "question": "Q?", "answer": "glucose"}
+        first, second = fake_message(1, "glucose"), fake_message(1, "Glucose")
+        cog = self._cog([first, second])
+        inter = FakeInteraction(1)
+        with patch.object(self.db, "get_random_trivia_question", return_value=question):
+            await cog.trivia.callback(cog, inter)
+        await asyncio.sleep(0)  # let the notice task run
+        self.assertEqual(len(first.replies), 1)
+        self.assertIn("started this round", first.replies[0])
+        self.assertEqual(second.replies, [])
+        self.assertTrue(inter.followup.sent[-1].embed.description.startswith("Nobody else got it"))
+
+    async def test_starter_can_answer_when_enabled(self):
+        question = {"id": 1, "question": "Q?", "answer": "glucose"}
+        cog = self._cog([fake_message(1, "glucose")])
+        with patch.object(Config, "TRIVIA_STARTER_CAN_ANSWER", True),                 patch.object(self.db, "get_random_trivia_question", return_value=question):
+            await cog.trivia.callback(cog, FakeInteraction(1))
+        self.assertAlmostEqual(self.db.get_user(1)["money"], Config.STARTING_BALANCE + Config.TRIVIA_REWARD)
 
     async def test_channel_cooldown(self):
         cog = self._cog([])
