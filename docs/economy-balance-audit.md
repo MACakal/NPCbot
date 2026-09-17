@@ -1,9 +1,42 @@
 # NPCbot Economy Balance Audit
 
-Status: audit only, no code has been changed
+Status: fixes implemented in 5 phases (see [Implementation status](#implementation-status))
 Scope: every place in `bot/` that creates, destroys, or moves money, plus the
 features that change how much money a player gets (NPC perks, shop items, odds).
 Date: 2026-09-17
+
+## Implementation status
+
+All tunables live in `bot/config.py`. Tests live in `tests/`; run them with
+`cd tests && python -W ignore -m unittest` (they use a temp data dir, never
+the real database).
+
+| Phase | Findings | What changed |
+|---|---|---|
+| 1. Critical exploits | C1, C2, C3 | Amount validation and atomic wallet/bank moves; guarded `try_debit_user` for jackpot, blackjack and NPC costs |
+| 2. Bank interest | H1, H2, L4 (labels) | `2%/day · B·K/(K+B)` with K = 5000 (at most $100/day), accrued hourly by whole periods, no dependence on others' balances |
+| 3. Gambling | H3, H4, M1, M2, L3, L5 | Coin flip pays 0.95×, $1,000 max bet, 25% of losses destroyed, green pays 11×, blackjack Double Down, jackpot pays 50% of pool with a pool-scaled ticket price and 5-min cooldown |
+| 4. Earnings & crime | H6, H7, M3, M4, M5 | 60s chat-reward cooldown (guild only), 8 work shifts/day, daily streak up to +50%, 5% destroyed transfer tax and $5,000/day limit, robbery minimum wallet / $500 steal cap / fine ≥ 50% of attempt / 2h target protection, trivia channel cooldown / starter can't answer / 5 wins/day / $25 minted prize / 60 questions |
+| 5. NPCs, shop, polish | H5, L1, L2, M6, M7, L4, timestamps | Perks 5%/5%/10% per level, choose your archetype, 30-min training cooldown, 25% training refund on release, Discount Badge $100 for 25%, no duplicate permanent items, consumables (Lockpick, Padlock, Energy Drink) with `/use`, leaderboard by wallet + bank, true UTC timestamps |
+
+**Not done (needs a decision from you):**
+- **Existing live balances** were left untouched. Balances that were already
+  inflated stop compounding but aren't reduced. Run Appendix B to decide
+  whether to cap or rescale them, and to find negative balances left by
+  C1–C3.
+- **NPC upkeep and a wealth tax** (M7) weren't added. The sinks that now exist
+  are: burned gambling losses, the transfer tax, and consumable items.
+- **Blackjack hands lost on restart** (M2) still aren't persisted.
+
+**Deployment notes:**
+- Schema changes are additive only (`user_timers`, `daily_streaks`,
+  `daily_counters`). The NPC roster and shop catalog now *upsert* on startup,
+  so their new values reach the live DB.
+- The bot needs a restart to pick up the changes. Slash-command option
+  changes (bet ranges, archetype choice, `/use`) show up after the command
+  tree re-syncs on startup.
+- The host is UTC+2, and old timestamps were stored 2h behind real time. After
+  the switch, existing cooldowns expire up to 2h early once. This is harmless.
 
 ## How to read this document
 
