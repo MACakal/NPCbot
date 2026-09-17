@@ -49,8 +49,30 @@ class Config:
     NPC_MAX_LEVEL = 5
     HIGH_ROLLER_BET_THRESHOLD = 500
     BIG_WINNER_WIN_THRESHOLD = 1000
-    TRIVIA_REWARD = 75
+    TRIVIA_REWARD = 25
     TRIVIA_TIMEOUT_SECONDS = 30
+    TRIVIA_CHANNEL_COOLDOWN_SECONDS = 300
+    TRIVIA_MAX_WINS_PER_DAY = 5
+
+    # Chat rewards: at most one payout per user per cooldown window.
+    MESSAGE_REWARD_COOLDOWN_SECONDS = 60
+    MESSAGE_MIN_LENGTH = 3
+
+    WORK_MAX_SHIFTS_PER_DAY = 8          # per UTC day
+
+    # Consecutive /daily-claim streak: +10% per day, up to +50%. Missing
+    # the claim for more than the grace window resets the streak.
+    DAILY_STREAK_BONUS = 0.10
+    DAILY_STREAK_MAX_BONUS = 0.50
+    DAILY_STREAK_GRACE_SECONDS = 48 * 3600
+
+    GIVE_TAX_PERCENT = 0.05              # destroyed, not paid to anyone
+    GIVE_DAILY_LIMIT = 5000              # max sent per UTC day
+
+    ROB_MIN_ROBBER_BALANCE = 100
+    ROB_MAX_STEAL = 500
+    ROB_FAIL_PENALTY_OF_ATTEMPT = 0.50   # fine is at least half of what you tried to steal
+    ROB_TARGET_PROTECTION_SECONDS = 7200 # a robbed user can't be robbed again for 2h
 
     # Bank interest: each account earns
     #   DAILY_RATE * balance * SOFT_CAP / (SOFT_CAP + balance)

@@ -173,6 +173,15 @@ class DatabaseManager:
             """
         )
 
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS daily_streaks (
+                user_id INTEGER PRIMARY KEY,
+                streak INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+
         # Per-user running totals that reset each UTC day (work shifts,
         # trivia wins, money given, ...).
         cursor.execute(
@@ -265,6 +274,56 @@ class DatabaseManager:
             (8, "How many chromosomes are in a typical human somatic cell?", "46"),
             (9, "What macronutrient is the body's primary source of quick energy?", "carbohydrates|carbs"),
             (10, "What vitamin does sunlight help your skin produce?", "vitamin d|vitamin d3"),
+            (11, "Which blood cells carry oxygen around the body?", "red blood cells|red blood cell|erythrocytes|rbc|rbcs"),
+            (12, "What is the longest bone in the human body?", "femur|thigh bone"),
+            (13, "What is the smallest bone in the human body?", "stapes|stirrup"),
+            (14, "Which organ produces insulin?", "pancreas"),
+            (15, "What protein makes up most of your hair and nails?", "keratin"),
+            (16, "How many chambers does the human heart have?", "4|four"),
+            (17, "What is the largest muscle in the human body?", "gluteus maximus|glutes|glute"),
+            (18, "Which molecule is the cell's main energy currency?", "atp|adenosine triphosphate"),
+            (19, "What tissue connects muscle to bone?", "tendon|tendons"),
+            (20, "What tissue connects bone to bone?", "ligament|ligaments"),
+            (21, "Which organ filters blood to produce urine?", "kidney|kidneys"),
+            (22, "What is the main mineral stored in bones?", "calcium"),
+            (23, "Which part of the brain is mainly responsible for balance and coordination?", "cerebellum"),
+            (24, "What pigment gives skin its colour?", "melanin"),
+            (25, "How many calories are in one gram of protein?", "4|four"),
+            (26, "How many calories are in one gram of fat?", "9|nine"),
+            (27, "What is the name of the muscle that separates the chest from the abdomen?", "diaphragm"),
+            (28, "Which gas do humans exhale as a waste product?", "carbon dioxide|co2"),
+            (29, "What is the name for the tiny air sacs in the lungs?", "alveoli|alveolus"),
+            (30, "Which vitamin is essential for blood clotting?", "vitamin k|k"),
+            (31, "What organ stores bile?", "gallbladder|gall bladder"),
+            (32, "What is the largest internal organ in the human body?", "liver"),
+            (33, "Which hormone is known as the main stress hormone?", "cortisol"),
+            (34, "What is the muscle on the front of the upper arm called?", "biceps|bicep|biceps brachii"),
+            (35, "What is the muscle on the back of the upper arm called?", "triceps|tricep|triceps brachii"),
+            (36, "Which amino acid is best known for triggering muscle protein synthesis?", "leucine"),
+            (37, "What does DNA stand for?", "deoxyribonucleic acid"),
+            (38, "How many pairs of ribs does a typical human have?", "12|twelve"),
+            (39, "Which blood vessels carry blood away from the heart?", "arteries|artery"),
+            (40, "Which blood vessels carry blood back to the heart?", "veins|vein"),
+            (41, "What is the kneecap's anatomical name?", "patella"),
+            (42, "What is the collarbone's anatomical name?", "clavicle"),
+            (43, "What is the breastbone's anatomical name?", "sternum"),
+            (44, "Which hormone lowers blood sugar?", "insulin"),
+            (45, "What is the planet closest to the Sun?", "mercury"),
+            (46, "What is the chemical symbol for gold?", "au"),
+            (47, "What is the boiling point of water at sea level in Celsius?", "100"),
+            (48, "What is the largest planet in our solar system?", "jupiter"),
+            (49, "How many continents are there on Earth?", "7|seven"),
+            (50, "What is the chemical formula for water?", "h2o"),
+            (51, "What is the fastest land animal?", "cheetah"),
+            (52, "How many minutes are in a day?", "1440"),
+            (53, "What is the square root of 144?", "12|twelve"),
+            (54, "Which element has the atomic number 1?", "hydrogen|h"),
+            (55, "What is the most abundant gas in Earth's atmosphere?", "nitrogen|n2"),
+            (56, "What type of muscle is the heart made of?", "cardiac|cardiac muscle"),
+            (57, "What is the name of the joint between the upper arm and forearm?", "elbow"),
+            (58, "What sugar is the body's main fuel, carried in the blood?", "glucose"),
+            (59, "What is the stored form of glucose in muscles and liver called?", "glycogen"),
+            (60, "How many teeth does a typical adult human have?", "32|thirty-two|thirty two"),
         ]
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -375,8 +434,10 @@ class DatabaseManager:
         conn.commit()
         return cursor.rowcount > 0
 
-    def transfer_money(self, from_id: int, to_id: int, amount: float) -> bool:
-        if amount <= 0:
+    def transfer_money(self, from_id: int, to_id: int, amount: float, fee: float = 0.0) -> bool:
+        """Take `amount` from the sender; the recipient gets `amount - fee`
+        and the fee is destroyed."""
+        if amount <= 0 or fee < 0 or fee > amount:
             return False
         # Create the recipient before BEGIN: create_user commits, which would
         # otherwise end the transaction between the debit and the credit.
@@ -394,7 +455,7 @@ class DatabaseManager:
                 return False
             cursor.execute(
                 'UPDATE users SET money = money + ? WHERE id = ?',
-                (amount, to_id)
+                (amount - fee, to_id)
             )
             conn.commit()
             return True
@@ -424,6 +485,31 @@ class DatabaseManager:
             ON CONFLICT(user_id, timer) DO UPDATE SET until_ts = excluded.until_ts
             """,
             (user_id, timer, until_ts)
+        )
+        conn.commit()
+
+    def extend_timer(self, user_id: int, timer: str, until_ts: int) -> None:
+        """Like set_timer, but never shortens a timer that runs longer."""
+        current = self.get_timer(user_id, timer)
+        if current is None or until_ts > current:
+            self.set_timer(user_id, timer, until_ts)
+
+    def get_daily_streak(self, user_id: int) -> int:
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT streak FROM daily_streaks WHERE user_id = ?', (user_id,))
+        row = cursor.fetchone()
+        return row[0] if row else 0
+
+    def set_daily_streak(self, user_id: int, streak: int) -> None:
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO daily_streaks (user_id, streak) VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET streak = excluded.streak
+            """,
+            (user_id, streak)
         )
         conn.commit()
 
@@ -925,6 +1011,31 @@ class DatabaseManager:
         row = cursor.fetchone()
         return row[0] if row else 0.0
 
+    def consume_item(self, user_id: int, effect_type: str) -> float:
+        """Use up one owned item with this effect. Returns its effect_value,
+        or 0.0 if the user owns none."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT shop_items.id, shop_items.effect_value
+            FROM user_inventory
+            JOIN shop_items ON shop_items.id = user_inventory.item_id
+            WHERE user_inventory.user_id = ? AND shop_items.effect_type = ? AND user_inventory.quantity > 0
+            LIMIT 1
+            """,
+            (user_id, effect_type)
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return 0.0
+        cursor.execute(
+            'UPDATE user_inventory SET quantity = quantity - 1 WHERE user_id = ? AND item_id = ? AND quantity > 0',
+            (user_id, row[0])
+        )
+        conn.commit()
+        return row[1] if cursor.rowcount > 0 else 0.0
+
     # ========== Achievements ==========
     def unlock_achievement(self, user_id: int, achievement_id: str) -> bool:
         """Returns True if this was a newly-unlocked achievement, False if
@@ -955,26 +1066,6 @@ class DatabaseManager:
         cursor.execute('SELECT * FROM trivia_questions')
         rows = cursor.fetchall()
         return dict(random.choice(rows)) if rows else None
-
-    def award_trivia_prize(self, user_id: int, reward: float) -> float:
-        """Pays the reward out of the shared pool, capped to what the pool
-        actually has. Returns the amount actually paid."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        try:
-            cursor.execute('BEGIN')
-            cursor.execute('SELECT money FROM pool WHERE id = 1')
-            row = cursor.fetchone()
-            pool_money = row[0] if row else 0
-            actual = min(reward, max(pool_money, 0))
-            if actual > 0:
-                cursor.execute('UPDATE pool SET money = money - ? WHERE id = 1', (actual,))
-                cursor.execute('UPDATE users SET money = money + ? WHERE id = ?', (actual, user_id))
-            conn.commit()
-            return actual
-        except Exception as e:
-            conn.rollback()
-            raise e
 
     # ========== Utility ==========
     def close(self):
