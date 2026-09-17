@@ -31,11 +31,12 @@ class FakeResponse:
         self.sent = []
         self.edited = []
 
-    async def send_message(self, content=None, *, embed=None, view=None, ephemeral=False):
-        self.sent.append(SimpleNamespace(content=content, embed=embed, view=view, ephemeral=ephemeral))
+    async def send_message(self, content=None, *, embed=None, view=None, ephemeral=False, delete_after=None):
+        self.sent.append(SimpleNamespace(content=content, embed=embed, view=view, ephemeral=ephemeral,
+                                         delete_after=delete_after))
 
-    async def edit_message(self, *, embed=None, view=None):
-        self.edited.append(SimpleNamespace(embed=embed, view=view))
+    async def edit_message(self, *, embed=None, view=None, delete_after=None):
+        self.edited.append(SimpleNamespace(embed=embed, view=view, delete_after=delete_after))
 
 
 class FakeFollowup:

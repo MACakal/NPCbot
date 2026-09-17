@@ -95,7 +95,7 @@ class Economy(commands.Cog):
             )
             embed.add_field(name="Available At", value=f"{clock.format_utc(next_claim_ts)} UTC", inline=False)
 
-            await interaction.response.send_message(embed=embed)
+            await interaction.response.send_message(embed=embed, delete_after=Config.TRANSIENT_MESSAGE_SECONDS)
 
     @app_commands.command(name="work", description="Work a quick job for some quick cash")
     async def work(self, interaction: discord.Interaction):
@@ -117,7 +117,7 @@ class Economy(commands.Cog):
                 ),
                 color=discord.Color.orange()
             )
-            await interaction.response.send_message(embed=embed)
+            await interaction.response.send_message(embed=embed, delete_after=Config.TRANSIENT_MESSAGE_SECONDS)
             return
 
         if not last_work or now >= last_work + Config.WORK_COOLDOWN_SECONDS:
@@ -147,7 +147,7 @@ class Economy(commands.Cog):
                 description=f"You can work again in **{clock.format_duration(time_left)}**",
                 color=discord.Color.orange()
             )
-            await interaction.response.send_message(embed=embed)
+            await interaction.response.send_message(embed=embed, delete_after=Config.TRANSIENT_MESSAGE_SECONDS)
 
     @app_commands.command(name="give", description="Give money to another user")
     @app_commands.describe(member="User to give money to", amount="Amount to give")

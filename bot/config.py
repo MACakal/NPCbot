@@ -22,6 +22,9 @@ class Config:
     DATABASE_PATH = "database.db"
     SUGGESTIONS_PATH = str(BASE_DIR / "database" / "suggestions")
     COMMAND_PREFIX = '$'
+    # Public "not right now" notices are removed after this many seconds so
+    # they don't clutter the channel.
+    TRANSIENT_MESSAGE_SECONDS = 15
     DAILY_REWARD = 250
     JACKPOT_TICKET_PRICE = 50           # minimum ticket price
     JACKPOT_TICKET_POOL_PERCENT = 0.03  # price = max(minimum, 3% of pool)

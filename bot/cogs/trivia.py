@@ -122,7 +122,7 @@ class Trivia(commands.Cog):
     @staticmethod
     async def _send_notice(message: discord.Message, text: str):
         try:
-            await message.reply(text, mention_author=False, delete_after=15)
+            await message.reply(text, mention_author=False, delete_after=Config.TRANSIENT_MESSAGE_SECONDS)
         except discord.HTTPException:
             pass
 

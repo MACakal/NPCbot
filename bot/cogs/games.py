@@ -260,7 +260,9 @@ class JackpotView(discord.ui.View):
             description="Jackpot entry canceled.",
             color=discord.Color.orange()
         )
-        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.response.edit_message(
+            embed=embed, view=self, delete_after=Config.TRANSIENT_MESSAGE_SECONDS
+        )
         self.stop()
 
     async def on_timeout(self):
@@ -269,8 +271,9 @@ class JackpotView(discord.ui.View):
         for child in self.children:
             child.disabled = True
         if self.message:
+            # Nothing was bought, so the dead prompt is cleaned up.
             try:
-                await self.message.edit(view=self)
+                await self.message.edit(view=self, delete_after=Config.TRANSIENT_MESSAGE_SECONDS)
             except discord.HTTPException:
                 pass
 
