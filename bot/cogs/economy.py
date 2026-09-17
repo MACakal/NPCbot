@@ -230,6 +230,7 @@ class Economy(commands.Cog):
         self.db.apply_interest(user_id=interaction.user.id)
         bank_account = self.db.get_bank_account(user_id=interaction.user.id)
         interest = self.db.return_interest_rate(interaction.user.id)
+        max_daily = self.db.return_max_daily_interest(interaction.user.id)
 
         embed = discord.Embed(
             title="📊 Bank Statistics",
@@ -241,7 +242,8 @@ class Economy(commands.Cog):
         
         total_interest = bank_account["total_interest_earned"] if bank_account["total_interest_earned"] is not None else 0
         embed.add_field(name="Total Interest Earned", value=f"${total_interest:.2f}", inline=True)
-        embed.add_field(name="Daily interest", value=f"{interest * 100:.3f}%", inline=True)
+        embed.add_field(name="Current daily rate", value=f"{interest * 100:.3f}%", inline=True)
+        embed.add_field(name="Max interest per day", value=f"${max_daily:.2f}", inline=True)
         
         embed.set_footer(text=f"Requested by {interaction.user.name}")
 

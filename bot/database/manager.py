@@ -2,7 +2,6 @@ import sqlite3
 from typing import Optional, List, Dict
 from config import Config
 from datetime import datetime
-import math
 import threading
 import random
 
@@ -583,6 +582,28 @@ class DatabaseManager:
         row = cursor.fetchone()
         return row[0] if row else 0.0
 
+    @staticmethod
+    def interest_multiplier(balance: float) -> float:
+        """Fraction of the base rate a balance earns: ~1 for small balances,
+        shrinking so that absolute interest levels off at the soft cap."""
+        if balance <= 0:
+            return 0.0
+        k = Config.BANK_INTEREST_SOFT_CAP
+        return k / (k + balance)
+
+    @classmethod
+    def accrue_interest(cls, balance: float, periods: int, bonus: float = 0.0) -> float:
+        """Balance after `periods` accrual periods. Depends only on the
+        balance and the number of periods, so claiming often or rarely
+        gives the same result. Negative balances never accrue."""
+        periods_per_day = 86400 / Config.BANK_INTEREST_PERIOD_SECONDS
+        period_rate = Config.BANK_INTEREST_DAILY_RATE * (1 + bonus) / periods_per_day
+        for _ in range(min(periods, Config.BANK_INTEREST_MAX_PERIODS)):
+            if balance <= 0:
+                break
+            balance += balance * period_rate * cls.interest_multiplier(balance)
+        return balance
+
     def apply_interest(self, user_id: int) -> float:
         bank = self.get_bank_account(user_id)
         now = int(datetime.utcnow().timestamp())
@@ -590,30 +611,31 @@ class DatabaseManager:
         if not last_interest:
             self.update_bank_balance_and_interest(user_id, bank['money'], now)
             return 0
-        periods_passed = (now - last_interest) // 300
+        period = Config.BANK_INTEREST_PERIOD_SECONDS
+        periods_passed = (now - last_interest) // period
         if periods_passed < 1:
             return 0
-        total = max(self.get_total_money_in_circulation(), 1)
-        p = min(max(bank["money"] / total, 0.0), 1.0)
-        f = math.exp(-1.5 * p)
-        daily_rate = 0.10
-        period_rate = (1 + daily_rate)**(1/288) - 1
         bonus = self.get_perk_bonus(user_id, "bank_interest_bonus")
-        r_eff = period_rate * f * (1 + bonus)
-        new_balance = bank["money"] * (1 + r_eff)**periods_passed
+        new_balance = self.accrue_interest(bank["money"], periods_passed, bonus)
         interest_earned = new_balance - bank['money']
-        self.update_bank_balance_and_interest(user_id, new_balance, now, interest_earned)
+        # Advance by whole periods so the partial period isn't thrown away.
+        if periods_passed > Config.BANK_INTEREST_MAX_PERIODS:
+            new_last = now - (now - last_interest) % period
+        else:
+            new_last = last_interest + periods_passed * period
+        self.update_bank_balance_and_interest(user_id, new_balance, new_last, interest_earned)
         return interest_earned
 
     def return_interest_rate(self, user_id: int) -> float:
+        """Current effective daily rate for this user's bank balance."""
         bank = self.get_bank_account(user_id)
-        total = max(self.get_total_money_in_circulation(), 1)
-        p = min(max(bank["money"] / total, 0.0), 1.0)
-        f = math.exp(-1.5 * p)
-        daily_rate = 0.10
         bonus = self.get_perk_bonus(user_id, "bank_interest_bonus")
-        r_eff = daily_rate * f * (1 + bonus)
-        return r_eff
+        return Config.BANK_INTEREST_DAILY_RATE * (1 + bonus) * self.interest_multiplier(bank["money"])
+
+    def return_max_daily_interest(self, user_id: int) -> float:
+        """Ceiling on dollars of interest per day, however large the balance."""
+        bonus = self.get_perk_bonus(user_id, "bank_interest_bonus")
+        return Config.BANK_INTEREST_DAILY_RATE * (1 + bonus) * Config.BANK_INTEREST_SOFT_CAP
 
     # ========== NPC Companions ==========
     def get_npc_templates(self) -> List[Dict]:

@@ -31,7 +31,7 @@ class Admin(commands.Cog):
         user_id = target.id
         interest = self.db.return_interest_rate(user_id=user_id)
         await interaction.response.send_message(
-            f"{target.mention} gets {interest*100:.3f}% interest every 5 minutes (cumulative)."
+            f"{target.mention} currently earns {interest*100:.3f}% interest per day."
             , ephemeral=True
         )
     
