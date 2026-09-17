@@ -4,6 +4,7 @@ from discord.ext import commands
 from datetime import datetime, timedelta
 from database.manager import DatabaseManager
 from config import Config
+from utils.achievements import announce_unlock
 
 class Economy(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -42,19 +43,25 @@ class Economy(commands.Cog):
         
         # Check if 24 hours have passed (86400 seconds = 1 day)
         if last_daily is None or now >= last_daily + 86400:
-            self.db.update_user_money(user_id, Config.DAILY_REWARD)
+            bonus = self.db.get_perk_bonus(user_id, "daily_bonus")
+            reward = Config.DAILY_REWARD * (1 + bonus)
+            self.db.update_user_money(user_id, reward)
             self.db.update_last_daily(user_id, now)
-            
+
             next_claim = datetime.fromtimestamp(now + 86400).strftime('%Y-%m-%d %H:%M:%S')
-            
+
             embed = discord.Embed(
                 title="✅ Daily Claimed",
-                description=f"You received **${Config.DAILY_REWARD:.2f}**",
+                description=f"You received **${reward:.2f}**",
                 color=discord.Color.green()
             )
             embed.add_field(name="Next Claim", value=f"{next_claim} UTC", inline=False)
-            
+            if bonus > 0:
+                embed.set_footer(text=f"+{bonus * 100:.0f}% companion bonus applied")
+
             await interaction.response.send_message(embed=embed)
+            if self.db.unlock_achievement(user_id, "first_daily"):
+                await announce_unlock(interaction, "first_daily")
         else:
             next_claim_ts = last_daily + 86400
             next_claim = datetime.fromtimestamp(next_claim_ts).strftime('%Y-%m-%d %H:%M:%S')
@@ -71,6 +78,42 @@ class Economy(commands.Cog):
             
             await interaction.response.send_message(embed=embed)
     
+    @app_commands.command(name="work", description="Work a quick job for some quick cash")
+    async def work(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+        user_data = self.db.get_or_create_user(user_id)
+
+        now = int(datetime.utcnow().timestamp())
+        last_work = user_data["last_work"]
+
+        if last_work is None or now >= last_work + Config.WORK_COOLDOWN_SECONDS:
+            bonus = self.db.get_perk_bonus(user_id, "work_bonus")
+            reward = Config.WORK_REWARD * (1 + bonus)
+            self.db.update_user_money(user_id, reward)
+            self.db.update_last_work(user_id, now)
+
+            embed = discord.Embed(
+                title="🛠️ Job Done",
+                description=f"You worked a shift and earned **${reward:.2f}**",
+                color=discord.Color.green()
+            )
+            if bonus > 0:
+                embed.set_footer(text=f"+{bonus * 100:.0f}% companion bonus applied")
+            await interaction.response.send_message(embed=embed)
+            if self.db.unlock_achievement(user_id, "first_work"):
+                await announce_unlock(interaction, "first_work")
+        else:
+            time_left = (last_work + Config.WORK_COOLDOWN_SECONDS) - now
+            minutes = time_left // 60
+            seconds = time_left % 60
+
+            embed = discord.Embed(
+                title="⏰ Still On Break",
+                description=f"You can work again in **{minutes}m {seconds}s**",
+                color=discord.Color.orange()
+            )
+            await interaction.response.send_message(embed=embed)
+
     @app_commands.command(name="give", description="Give money to another user")
     @app_commands.describe(member="User to give money to", amount="Amount to give")
     async def give(self, interaction: discord.Interaction, member: discord.Member, amount: float):

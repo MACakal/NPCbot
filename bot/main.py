@@ -13,7 +13,7 @@ class MyBot(commands.Bot):
     
     async def setup_hook(self):
         """Load all cogs before syncing commands."""
-        cogs = ['cogs.admin', 'cogs.economy', 'cogs.games', 'cogs.utilities']
+        cogs = ['cogs.admin', 'cogs.economy', 'cogs.games', 'cogs.utilities', 'cogs.crime', 'cogs.npc', 'cogs.shop', 'cogs.achievements', 'cogs.trivia']
         
         for cog in cogs:
             try:
