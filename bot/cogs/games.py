@@ -5,9 +5,11 @@ import random
 from database.manager import DatabaseManager
 from config import Config
 from utils.achievements import announce_unlock
+from utils import clock
 
 SUITS = ["♠", "♥", "♦", "♣"]
 RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
+ROULETTE_OUTCOMES = ["red"] * 18 + ["black"] * 18 + ["green"] * 3
 
 
 def create_deck():
@@ -88,6 +90,8 @@ class BlackjackView(discord.ui.View):
     def determine_outcome(self) -> str:
         player_value = hand_value(self.player_hand)
         dealer_value = hand_value(self.dealer_hand)
+        if player_value > 21:
+            return "dealer_win"
         if dealer_value > 21 or player_value > dealer_value:
             return "player_win"
         if player_value < dealer_value:
@@ -117,31 +121,48 @@ class BlackjackView(discord.ui.View):
             result_text = "🤝 **Push.** Your bet was returned."
             color = discord.Color.light_grey()
         else:
-            db.update_pool_money(self.amount)
+            db.record_gambling_loss(self.amount)
             self.profit = 0
             result_text = f"💔 **You lost ${self.amount:.2f}.**"
             color = discord.Color.red()
 
         return self.build_embed(reveal_dealer=True, result_text=result_text, color=color)
 
+    async def finish(self, interaction: discord.Interaction, outcome: str):
+        embed = self.settle(outcome)
+        await interaction.response.edit_message(embed=embed, view=self)
+        self.stop()
+        await self.cog.check_gamble_achievements(interaction, self.amount, self.profit)
+
     @discord.ui.button(label="Hit", style=discord.ButtonStyle.primary)
     async def hit(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.player_hand.append(self.deck.pop())
+        self.double_down.disabled = True
         if hand_value(self.player_hand) > 21:
-            embed = self.settle("dealer_win")
-            await interaction.response.edit_message(embed=embed, view=self)
-            self.stop()
-            await self.cog.check_gamble_achievements(interaction, self.amount, self.profit)
+            await self.finish(interaction, "dealer_win")
             return
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
     @discord.ui.button(label="Stand", style=discord.ButtonStyle.secondary)
     async def stand(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.dealer_play()
-        embed = self.settle(self.determine_outcome())
-        await interaction.response.edit_message(embed=embed, view=self)
-        self.stop()
-        await self.cog.check_gamble_achievements(interaction, self.amount, self.profit)
+        await self.finish(interaction, self.determine_outcome())
+
+    @discord.ui.button(label="Double Down", style=discord.ButtonStyle.success)
+    async def double_down(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if len(self.player_hand) != 2:
+            await interaction.response.send_message("You can only double down on your first two cards.", ephemeral=True)
+            return
+        if not self.cog.db.try_debit_user(self.user_id, self.amount):
+            await interaction.response.send_message(
+                f"You need another **${self.amount:.2f}** to double down.", ephemeral=True
+            )
+            return
+        self.amount *= 2
+        self.player_hand.append(self.deck.pop())
+        if hand_value(self.player_hand) <= 21:
+            self.dealer_play()
+        await self.finish(interaction, self.determine_outcome())
 
     async def on_timeout(self):
         if self.finished:
@@ -174,6 +195,18 @@ class JackpotView(discord.ui.View):
     @discord.ui.button(label="Buy Ticket", style=discord.ButtonStyle.success)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         db = self.cog.db
+        now = clock.now_ts()
+
+        # Several prompts may be open at once, so the cooldown and the price
+        # are both re-checked at purchase time.
+        wait = db.timer_remaining(self.user_id, "jackpot_cooldown", now)
+        if wait > 0:
+            await interaction.response.send_message(
+                f"You can buy another ticket in **{clock.format_duration(wait)}**.", ephemeral=True
+            )
+            return
+
+        self.ticket_price = self.cog.ticket_price_for(self.user_id)
         # Balance is re-checked here, at purchase time, not when the prompt
         # was posted — the wallet may have been spent since.
         if not db.try_debit_user(self.user_id, self.ticket_price):
@@ -186,17 +219,18 @@ class JackpotView(discord.ui.View):
         for child in self.children:
             child.disabled = True
 
+        db.set_timer(self.user_id, "jackpot_cooldown", now + Config.JACKPOT_COOLDOWN_SECONDS)
         db.update_pool_money(self.ticket_price)
-        current_pool = db.get_pool()["money"]
 
         won = random.random() <= Config.JACKPOT_WIN_CHANCE
         if won:
-            db.update_user_money(self.user_id, current_pool)
-            db.set_pool_money(Config.JACKPOT_POOL_SEED)
-            self.won_amount = current_pool
+            self.won_amount = db.pay_jackpot(self.user_id)
             embed = discord.Embed(
                 title="🎆 JACKPOT WON!",
-                description=f"You hit the jackpot and won the entire pool: **${current_pool:.2f}**!",
+                description=(
+                    f"You hit the jackpot and won **${self.won_amount:.2f}** "
+                    f"({Config.JACKPOT_PAYOUT_PERCENT * 100:.0f}% of the pool)!"
+                ),
                 color=discord.Color.gold()
             )
         else:
@@ -212,7 +246,7 @@ class JackpotView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=self)
         self.stop()
 
-        await self.cog.check_gamble_achievements(interaction, self.ticket_price, self.won_amount)
+        await self.cog.check_gamble_achievements(interaction, self.ticket_price, self.won_amount - self.ticket_price)
         if won and db.unlock_achievement(self.user_id, "jackpot_winner"):
             await announce_unlock(interaction, "jackpot_winner")
 
@@ -245,7 +279,9 @@ class Games(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.db = DatabaseManager(Config.DATABASE_PATH)
-        self.roulette_outcomes = ["red"] * 18 + ["black"] * 18 + ["green"] * 3
+
+    def ticket_price_for(self, user_id: int) -> float:
+        return self.db.jackpot_ticket_price()
 
     async def check_gamble_achievements(self, interaction: discord.Interaction, bet: float, profit: float):
         """Shared achievement check for any single gamble action (bet placed / profit won)."""
@@ -258,43 +294,45 @@ class Games(commands.Cog):
             if self.db.unlock_achievement(interaction.user.id, achievement_id):
                 await announce_unlock(interaction, achievement_id)
 
+    async def reject_bet(self, interaction: discord.Interaction, amount: float) -> bool:
+        """Sends an error and returns True if the bet is out of range or
+        unaffordable. Discord enforces the range too, but only once the
+        command tree has been re-synced."""
+        if amount < 1 or amount > Config.MAX_BET:
+            description = f"Bets must be between $1 and ${Config.MAX_BET:,.0f}"
+            title = "❌ Invalid Amount"
+        elif amount > self.db.get_or_create_user(interaction.user.id)["money"]:
+            description = f"You don't have ${amount:.2f} to bet"
+            title = "❌ Insufficient Funds"
+        else:
+            return False
+        embed = discord.Embed(title=title, description=description, color=discord.Color.red())
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return True
+
     @app_commands.command(name="coin-flip", description="Double or nothing!")
     @app_commands.describe(amount="Amount to bet")
-    async def coin_flip(self, interaction: discord.Interaction, amount: float):
-        if amount <= 0:
-            embed = discord.Embed(
-                title="❌ Invalid Amount",
-                description="Amount must be greater than 0",
-                color=discord.Color.red()
-            )
-            await interaction.response.send_message(embed=embed)
+    async def coin_flip(self, interaction: discord.Interaction, amount: app_commands.Range[float, 1, Config.MAX_BET]):
+        amount = round(amount, 2)
+        if await self.reject_bet(interaction, amount):
             return
-        
+
         user_id = interaction.user.id
-        user_data = self.db.get_or_create_user(user_id)
-        
-        if amount > user_data["money"]:
-            embed = discord.Embed(
-                title="❌ Insufficient Funds",
-                description=f"You don't have ${amount:.2f} to bet",
-                color=discord.Color.red()
-            )
-            await interaction.response.send_message(embed=embed)
-            return
-        
         result = random.choice([True, False])
-        
+
         if result:
-            self.db.update_user_money(user_id, amount)
+            profit = round(amount * Config.COIN_FLIP_PAYOUT, 2)
+            self.db.update_user_money(user_id, profit)
             embed = discord.Embed(
                 title="🪙 Coin Flip - Win!",
-                description=f"You won **${amount:.2f}**",
+                description=f"You won **${profit:.2f}**",
                 color=discord.Color.green()
             )
             embed.set_footer(text="Heads!")
         else:
+            profit = 0
             self.db.update_user_money(user_id, -amount)
-            self.db.update_pool_money(amount)
+            self.db.record_gambling_loss(amount)
             embed = discord.Embed(
                 title="🪙 Coin Flip - Loss",
                 description=f"You lost **${amount:.2f}**",
@@ -303,50 +341,33 @@ class Games(commands.Cog):
             embed.set_footer(text="Tails!")
 
         await interaction.response.send_message(embed=embed)
-        await self.check_gamble_achievements(interaction, amount, amount if result else 0)
+        await self.check_gamble_achievements(interaction, amount, profit)
 
     @app_commands.command(name="roulette-color", description="Bet on red, black, or green")
     @app_commands.choices(color=[
-        app_commands.Choice(name="Red", value="red"),
-        app_commands.Choice(name="Black", value="black"),
-        app_commands.Choice(name="Green", value="green")
+        app_commands.Choice(name="Red (pays 1x)", value="red"),
+        app_commands.Choice(name="Black (pays 1x)", value="black"),
+        app_commands.Choice(name=f"Green (pays {Config.ROULETTE_GREEN_PAYOUT}x)", value="green")
     ])
     async def roulette_color(
         self,
         interaction: discord.Interaction,
         color: app_commands.Choice[str],
-        amount: int
+        amount: app_commands.Range[int, 1, Config.MAX_BET]
     ):
-        if amount <= 0:
-            embed = discord.Embed(
-                title="❌ Invalid Amount",
-                description="Amount must be greater than 0",
-                color=discord.Color.red()
-            )
-            await interaction.response.send_message(embed=embed)
+        if await self.reject_bet(interaction, amount):
             return
-        
+
         user_id = interaction.user.id
-        user_data = self.db.get_or_create_user(user_id)
-        
-        if amount > user_data["money"]:
-            embed = discord.Embed(
-                title="❌ Insufficient Funds",
-                description=f"You don't have ${amount} to bet",
-                color=discord.Color.red()
-            )
-            await interaction.response.send_message(embed=embed)
-            return
-        
-        outcome = random.choice(self.roulette_outcomes)
-        
+        outcome = random.choice(ROULETTE_OUTCOMES)
+
         # Get color emoji
         color_emoji = "🔴" if outcome == "red" else "⚫" if outcome == "black" else "🟢"
-        
+
         win_amount = 0
         if outcome == color.value:
             if outcome == "green":
-                win_amount = amount * 10
+                win_amount = amount * Config.ROULETTE_GREEN_PAYOUT
                 self.db.update_user_money(user_id, win_amount)
                 embed = discord.Embed(
                     title="🎰 Roulette - Jackpot!",
@@ -363,7 +384,7 @@ class Games(commands.Cog):
                 )
         else:
             self.db.update_user_money(user_id, -amount)
-            self.db.update_pool_money(amount)
+            self.db.record_gambling_loss(amount)
             embed = discord.Embed(
                 title="🎰 Roulette - Loss",
                 description=f"**{color_emoji} {outcome.upper()}**\n\nYou lost **${amount}**",
@@ -372,29 +393,22 @@ class Games(commands.Cog):
 
         await interaction.response.send_message(embed=embed)
         await self.check_gamble_achievements(interaction, amount, win_amount)
-    
+
     @app_commands.command(name="blackjack", description="Play a hand of blackjack against the dealer")
     @app_commands.describe(amount="Amount to bet")
-    async def blackjack(self, interaction: discord.Interaction, amount: float):
-        if amount <= 0:
-            embed = discord.Embed(
-                title="❌ Invalid Amount",
-                description="Amount must be greater than 0",
-                color=discord.Color.red()
-            )
-            await interaction.response.send_message(embed=embed)
+    async def blackjack(self, interaction: discord.Interaction, amount: app_commands.Range[float, 1, Config.MAX_BET]):
+        amount = round(amount, 2)
+        if await self.reject_bet(interaction, amount):
             return
 
         user_id = interaction.user.id
-        self.db.get_or_create_user(user_id)
-
         if not self.db.try_debit_user(user_id, amount):
             embed = discord.Embed(
                 title="❌ Insufficient Funds",
                 description=f"You don't have ${amount:.2f} to bet",
                 color=discord.Color.red()
             )
-            await interaction.response.send_message(embed=embed)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
         deck = create_deck()
@@ -420,31 +434,44 @@ class Games(commands.Cog):
         await interaction.response.send_message(embed=view.build_embed(), view=view)
         view.message = await interaction.original_response()
 
-    @app_commands.command(name="jackpot", description="Buy a ticket for a chance to win the entire pool")
+    @app_commands.command(name="jackpot", description="Buy a ticket for a chance to win the pool")
     async def jackpot(self, interaction: discord.Interaction):
         user_id = interaction.user.id
         user_data = self.db.get_or_create_user(user_id)
         pool_data = self.db.get_pool()
+        price = self.ticket_price_for(user_id)
 
-        if user_data["money"] < Config.JACKPOT_TICKET_PRICE:
+        wait = self.db.timer_remaining(user_id, "jackpot_cooldown", clock.now_ts())
+        if wait > 0:
+            embed = discord.Embed(
+                title="⏰ Ticket Cooldown",
+                description=f"You can buy another ticket in **{clock.format_duration(wait)}**",
+                color=discord.Color.orange()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        if user_data["money"] < price:
             embed = discord.Embed(
                 title="❌ Insufficient Funds",
-                description=f"A ticket costs **${Config.JACKPOT_TICKET_PRICE:.2f}**",
+                description=f"A ticket costs **${price:.2f}**",
                 color=discord.Color.red()
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
-        view = JackpotView(self, user_id, Config.JACKPOT_TICKET_PRICE)
+        view = JackpotView(self, user_id, price)
         embed = discord.Embed(
             title="🎰 Jackpot",
             description=(
-                f"Buy a **${Config.JACKPOT_TICKET_PRICE:.2f}** ticket for a "
-                f"**{Config.JACKPOT_WIN_CHANCE * 100:.0f}%** chance to win the **entire pool**."
+                f"Buy a **${price:.2f}** ticket for a "
+                f"**{Config.JACKPOT_WIN_CHANCE * 100:.0f}%** chance to win "
+                f"**{Config.JACKPOT_PAYOUT_PERCENT * 100:.0f}% of the pool**."
             ),
             color=discord.Color.gold()
         )
         embed.add_field(name="Current Pool", value=f"${pool_data['money']:.2f}", inline=True)
+        embed.set_footer(text="Ticket price scales with the pool.")
         await interaction.response.send_message(embed=embed, view=view)
         view.message = await interaction.original_response()
 

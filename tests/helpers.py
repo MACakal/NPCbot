@@ -8,8 +8,12 @@ import os
 import sys
 import tempfile
 import uuid
+import warnings
 from pathlib import Path
 from types import SimpleNamespace
+
+# Test DBs are throwaway; don't warn about connections left open.
+warnings.simplefilter("ignore", ResourceWarning)
 
 TEST_DATA_DIR = tempfile.mkdtemp(prefix="npcbot-tests-")
 os.environ["BOT_DATA_DIR"] = TEST_DATA_DIR

@@ -23,9 +23,16 @@ class Config:
     SUGGESTIONS_PATH = str(BASE_DIR / "database" / "suggestions")
     COMMAND_PREFIX = '$'
     DAILY_REWARD = 250
-    JACKPOT_TICKET_PRICE = 50
+    JACKPOT_TICKET_PRICE = 50           # minimum ticket price
+    JACKPOT_TICKET_POOL_PERCENT = 0.03  # price = max(minimum, 3% of pool)
     JACKPOT_WIN_CHANCE = 0.05
-    JACKPOT_POOL_SEED = 0
+    JACKPOT_PAYOUT_PERCENT = 0.50       # winner takes half; the rest seeds the next pool
+    JACKPOT_POOL_SEED = 0               # floor for the pool after a win
+    JACKPOT_COOLDOWN_SECONDS = 300
+    MAX_BET = 1000
+    COIN_FLIP_PAYOUT = 0.95             # profit per $1 bet on a win
+    ROULETTE_GREEN_PAYOUT = 11          # profit multiplier; 3/39 slots are green
+    GAMBLING_LOSS_BURN_PERCENT = 0.25   # share of every lost bet that is destroyed
     STARTING_BALANCE = 100
     MONEY_PER_MESSAGE = 0.50
     OWNER_ID = 719140739384344627

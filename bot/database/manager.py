@@ -159,6 +159,33 @@ class DatabaseManager:
             )
             """
         )
+
+        # Generic per-user timers: "this action is blocked/active until
+        # until_ts". Used for cooldowns and temporary protections.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_timers (
+                user_id INTEGER NOT NULL,
+                timer TEXT NOT NULL,
+                until_ts INTEGER NOT NULL,
+                PRIMARY KEY (user_id, timer)
+            )
+            """
+        )
+
+        # Per-user running totals that reset each UTC day (work shifts,
+        # trivia wins, money given, ...).
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS daily_counters (
+                user_id INTEGER NOT NULL,
+                counter TEXT NOT NULL,
+                day TEXT NOT NULL,
+                amount REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, counter)
+            )
+            """
+        )
         conn.commit()
 
         self._seed_npc_templates()
@@ -375,6 +402,54 @@ class DatabaseManager:
             conn.rollback()
             raise e
 
+    # ========== Timers & Daily Counters ==========
+    def get_timer(self, user_id: int, timer: str) -> Optional[int]:
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT until_ts FROM user_timers WHERE user_id = ? AND timer = ?', (user_id, timer))
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+    def timer_remaining(self, user_id: int, timer: str, now: int) -> int:
+        """Seconds until the timer expires, or 0 if it isn't running."""
+        until = self.get_timer(user_id, timer)
+        return max(until - now, 0) if until is not None else 0
+
+    def set_timer(self, user_id: int, timer: str, until_ts: int) -> None:
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO user_timers (user_id, timer, until_ts) VALUES (?, ?, ?)
+            ON CONFLICT(user_id, timer) DO UPDATE SET until_ts = excluded.until_ts
+            """,
+            (user_id, timer, until_ts)
+        )
+        conn.commit()
+
+    def get_daily_counter(self, user_id: int, counter: str, day: str) -> float:
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT day, amount FROM daily_counters WHERE user_id = ? AND counter = ?', (user_id, counter))
+        row = cursor.fetchone()
+        return row[1] if row and row[0] == day else 0.0
+
+    def add_daily_counter(self, user_id: int, counter: str, day: str, amount: float) -> float:
+        """Add to today's counter (resetting it if it belongs to an earlier
+        day) and return the new total."""
+        total = self.get_daily_counter(user_id, counter, day) + amount
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO daily_counters (user_id, counter, day, amount) VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, counter) DO UPDATE SET day = excluded.day, amount = excluded.amount
+            """,
+            (user_id, counter, day, total)
+        )
+        conn.commit()
+        return total
+
     # ========== Robbery ==========
     def get_last_rob_attempt(self, user_id: int) -> Optional[int]:
         conn = self._get_connection()
@@ -459,6 +534,38 @@ class DatabaseManager:
         )
         conn.commit()
         return cursor.rowcount > 0
+
+    def record_gambling_loss(self, amount: float) -> float:
+        """A lost bet: part of it is destroyed (a money sink), the rest
+        feeds the pool. Returns the amount added to the pool."""
+        to_pool = amount * (1 - Config.GAMBLING_LOSS_BURN_PERCENT)
+        self.update_pool_money(to_pool)
+        return to_pool
+
+    def jackpot_ticket_price(self) -> float:
+        """Ticket price scales with the pool so a ticket is never +EV."""
+        pool = self.get_pool()["money"]
+        return round(max(Config.JACKPOT_TICKET_PRICE, pool * Config.JACKPOT_TICKET_POOL_PERCENT), 2)
+
+    def pay_jackpot(self, user_id: int) -> float:
+        """Atomically pay the winner their share of the pool; the rest
+        stays as the next pool. Returns the amount paid."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute('BEGIN')
+            cursor.execute('SELECT money FROM pool WHERE id = 1')
+            row = cursor.fetchone()
+            pool_money = max(row[0] if row else 0, 0)
+            payout = round(pool_money * Config.JACKPOT_PAYOUT_PERCENT, 2)
+            remaining = max(pool_money - payout, Config.JACKPOT_POOL_SEED)
+            cursor.execute('UPDATE pool SET money = ? WHERE id = 1', (remaining,))
+            cursor.execute('UPDATE users SET money = money + ? WHERE id = ?', (payout, user_id))
+            conn.commit()
+            return payout
+        except Exception as e:
+            conn.rollback()
+            raise e
 
     # ========== Leaderboard & Stats ==========
     def get_leaderboard(self, limit: int = 10) -> List[Dict]:
